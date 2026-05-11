@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 use crate::request::{self, Request};
+use crate::utils;
 
 type Handler = fn(&mut TcpStream, &request::Request);
 
@@ -29,6 +30,7 @@ impl Server {
                 match stream {
                     Ok(stream) => {
                         let routes = self.routes.clone();
+                        // needs to be replaces with tokio::spawn
                         let _ = std::thread::spawn(move || handle_client(stream, routes));
                     }
                     Err(e) => {
@@ -106,24 +108,12 @@ fn parse_request(req: String) -> Result<Request, String> {
         Some(m) => m,
         None => return Err(format!("Unknown method: {}", request_parts[0])),
     };
-    let path = request_parts[1].to_string();
+    let raw_path = request_parts[1].to_string();
+    let (path, query_params) = parse_qs(raw_path);
+    let headers = parse_headers(&lines);
+    let body = parse_body(body_str.as_bytes().to_vec(), &headers)?;
 
-    let mut headers_map = HashMap::new();
-    for line in &lines[1..] {
-        if let Some((key, value)) = line.split_once(": ") {
-            headers_map.insert(key.to_string(), value.to_string());
-        }
-    }
-
-    let body_bytes = body_str.as_bytes().to_vec();
-
-    let body = if body_bytes.is_empty() {
-        request::Body::Empty
-    } else {
-        request::Body::Raw(body_bytes)
-    };
-
-    Ok(Request::new(method, path, headers_map, body))
+    Ok(Request::new(method, path, query_params, body))
 }
 
 fn route_request(
@@ -133,9 +123,76 @@ fn route_request(
 ) {
     match routes.get(&(req.method, req.path.as_str())) {
         Some(handler) => handler(stream, req),
-        None => {
-            let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-            stream.write_all(response.as_bytes()).ok();
+        None => utils::error_response(stream, Some(404), "Not Found"),
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex = format!(
+                "{}{}",
+                chars.next().unwrap_or('0'),
+                chars.next().unwrap_or('0')
+            );
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                result.push(byte as char);
+            }
+        } else if c == '+' {
+            result.push(' '); // + means space in query strings
+        } else {
+            result.push(c);
         }
     }
+    result
+}
+
+fn parse_headers(lines: &Vec<&str>) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    for line in &lines[1..] {
+        if let Some((key, value)) = line.split_once(": ") {
+            headers.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    headers
+}
+
+fn parse_qs(path: String) -> (String, HashMap<String, String>) {
+    match path.split_once('?') {
+        Some((path_part, query_part)) => {
+            let mut params = HashMap::new();
+            for pair in query_part.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    params.insert(percent_decode(key), percent_decode(value));
+                }
+            }
+            (path_part.to_string(), params)
+        }
+        None => (path, HashMap::new()),
+    }
+}
+
+fn parse_body(
+    body_bytes: Vec<u8>,
+    headers: &HashMap<String, String>,
+) -> Result<request::Body, String> {
+    if body_bytes.is_empty() {
+        return Ok(request::Body::Empty);
+    }
+
+    if headers
+        .get("Content-Type")
+        .map(|ct| ct.contains("application/json"))
+        .unwrap_or(false)
+    {
+        let json =
+            serde_json::from_slice(&body_bytes).map_err(|e| format!("Invalid JSON: {}", e))?;
+        return Ok(request::Body::Json(json));
+    }
+
+    Ok(request::Body::Raw(body_bytes))
 }

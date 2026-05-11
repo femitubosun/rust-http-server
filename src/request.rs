@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use serde_json::Value;
-
 pub enum Body {
     Json(serde_json::Value),
     Raw(Vec<u8>),
@@ -11,7 +9,7 @@ pub enum Body {
 pub struct Request {
     pub method: RequestMethod,
     pub path: String,
-    pub headers: HashMap<String, String>,
+    pub query_params: HashMap<String, String>,
     pub body: Body,
 }
 
@@ -19,13 +17,13 @@ impl Request {
     pub fn new(
         method: RequestMethod,
         path: String,
-        headers: HashMap<String, String>,
+        query_params: HashMap<String, String>,
         body: Body,
     ) -> Self {
         Request {
             method,
             path,
-            headers,
+            query_params,
             body,
         }
     }
