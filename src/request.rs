@@ -8,18 +8,6 @@ pub enum Body {
     Empty,
 }
 
-impl Body {
-    pub fn parse_json(&self) -> Result<Value, String> {
-        match self {
-            Body::Raw(bytes) => {
-                serde_json::from_slice(bytes).map_err(|e| format!("Invalid JSON: {}", e))
-            }
-            Body::Empty => Err("No body provided".to_string()),
-            Body::Json(val) => Ok(val.clone()),
-        }
-    }
-}
-
 pub struct Request {
     pub method: RequestMethod,
     pub path: String,

@@ -1,10 +1,12 @@
-use std::io::Write;
 use std::net::TcpStream;
 
 use serde_json::json;
 
+use crate::utils::parse_json_body;
+
 mod request;
 mod server;
+mod utils;
 
 fn main() {
     const PORT: u16 = 3000;
@@ -17,31 +19,13 @@ fn main() {
 
     println!("Server listening on port: {PORT}")
 }
-fn health_handler(stream: &mut TcpStream, req: &request::Request) {
-    let response = "HTTP/1.1 200 OK\r\nContent-Length: 18\r\n\r\nHello, from health";
-    stream
-        .write(response.as_bytes())
-        .expect("Failed to write to client!");
+fn health_handler(stream: &mut TcpStream, _req: &request::Request) {
+    utils::json_response(stream, 200, &json!({"status": "OK"}));
 }
 
 fn post_handler(stream: &mut TcpStream, req: &request::Request) {
-    match req.body.parse_json() {
-        Ok(json) => {
-            let response_body = json.to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            stream.write_all(response.as_bytes()).ok();
-        }
-        Err(e) => {
-            let response = format!(
-                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\n\r\n{}",
-                e.len(),
-                e
-            );
-            stream.write_all(response.as_bytes()).ok();
-        }
+    match parse_json_body(req) {
+        Ok(json) => utils::json_response(stream, 200, &json),
+        Err(e) => utils::error_response(stream, Some(500), e),
     }
 }
