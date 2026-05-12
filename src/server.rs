@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 
 use crate::request::{self, Request};
 use crate::utils;
@@ -20,20 +21,26 @@ impl Server {
         }
     }
 
-    pub async fn listen(self, port: u16) {
+    pub async fn listen(self, port: u16, mut shutdown: broadcast::Receiver<()>) {
         let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
             .await
             .expect("Failed to bind to address");
         let routes = Arc::new(self.routes);
 
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    let routes = Arc::clone(&routes);
-                    tokio::spawn(handle_client(stream, routes));
+            tokio::select! {
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, _)) => {
+                            let routes = Arc::clone(&routes);
+                            tokio::spawn(handle_client(stream, routes));
+                        }
+                        Err(e) => eprintln!("Failed to establish connection: {e}"),
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Failed to establish connection: {e}")
+                _ = shutdown.recv() => {
+                    println!("Shutting down...");
+                    break;
                 }
             }
         }

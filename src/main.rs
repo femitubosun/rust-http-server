@@ -1,4 +1,4 @@
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, sync::broadcast};
 
 use serde_json::json;
 
@@ -16,8 +16,16 @@ async fn main() {
     app.get("/health", health_handler);
     app.post("/echo", echo_post_handler);
     app.get("/echo", echo_get_handler);
+    app.get("/slow", slow_handler);
 
-    app.listen(PORT).await;
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        let _ = shutdown_tx.send(());
+    });
+
+    app.listen(PORT, shutdown_rx).await;
 
     println!("Server listening on port: {PORT}")
 }
@@ -44,5 +52,12 @@ fn echo_get_handler<'a>(stream: &'a mut TcpStream, req: &'a request::Request) ->
             &serde_json::to_value(&req.query_params).unwrap(),
         )
         .await
+    })
+}
+
+fn slow_handler<'a>(stream: &'a mut TcpStream, _req: &'a request::Request) -> BoxedFut<'a> {
+    Box::pin(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        utils::json_response(stream, 200, &json!({"status": "slow"})).await;
     })
 }
