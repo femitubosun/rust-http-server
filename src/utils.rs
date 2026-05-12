@@ -1,5 +1,5 @@
-use std::io::Write;
-use std::net::TcpStream;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 
 use serde_json::from_slice;
 
@@ -13,7 +13,7 @@ pub fn parse_json_body(req: &Request) -> Result<serde_json::Value, String> {
     }
 }
 
-pub fn json_response(stream: &mut TcpStream, status: u16, body: &serde_json::Value) {
+pub async fn json_response(stream: &mut TcpStream, status: u16, body: &serde_json::Value) {
     let bytes = body.to_string();
     let response = format!(
         "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
@@ -29,10 +29,14 @@ pub fn json_response(stream: &mut TcpStream, status: u16, body: &serde_json::Val
         bytes.len(),
         bytes
     );
-    stream.write_all(response.as_bytes()).ok();
+    stream.write_all(response.as_bytes()).await.ok();
 }
 
-pub fn error_response(stream: &mut TcpStream, status: Option<u16>, e: impl std::fmt::Display) {
+pub async fn error_response(
+    stream: &mut TcpStream,
+    status: Option<u16>,
+    e: impl std::fmt::Display,
+) {
     let status = status.unwrap_or(500);
     let bytes = e.to_string();
     let response = format!(
@@ -47,5 +51,5 @@ pub fn error_response(stream: &mut TcpStream, status: Option<u16>, e: impl std::
         bytes.len(),
         bytes
     );
-    stream.write_all(response.as_bytes()).ok();
+    stream.write_all(response.as_bytes()).await.ok();
 }

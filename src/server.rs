@@ -1,41 +1,39 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::request::{self, Request};
 use crate::utils;
 
-type Handler = fn(&mut TcpStream, &request::Request);
+pub type BoxedFut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+pub type Handler = for<'a> fn(&'a mut TcpStream, &'a Request) -> BoxedFut<'a>;
 
 pub struct Server {
-    tcp_listener: Option<TcpListener>,
     routes: HashMap<(request::RequestMethod, &'static str), Handler>,
 }
 
 impl Server {
     pub fn init() -> Self {
         Server {
-            tcp_listener: None,
             routes: HashMap::new(),
         }
     }
 
-    pub fn listen(&mut self, port: &u16) {
-        self.tcp_listener = Some(
-            TcpListener::bind(format!("127.0.0.1:{port}")).expect("Failed to bind to address"),
-        );
+    pub async fn listen(self, port: u16) {
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
+            .await
+            .expect("Failed to bind to address");
+        let routes = Arc::new(self.routes);
 
-        if let Some(ref listener) = self.tcp_listener {
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => {
-                        let routes = self.routes.clone();
-                        // needs to be replaces with tokio::spawn
-                        let _ = std::thread::spawn(move || handle_client(stream, routes));
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to establish connection: {e}")
-                    }
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let routes = Arc::clone(&routes);
+                    tokio::spawn(handle_client(stream, routes));
+                }
+                Err(e) => {
+                    eprintln!("Failed to establish connection: {e}")
                 }
             }
         }
@@ -60,12 +58,16 @@ impl Server {
     }
 }
 
-fn handle_client(
+async fn handle_client(
     mut stream: TcpStream,
-    routes: HashMap<(request::RequestMethod, &'static str), Handler>,
+    routes: Arc<HashMap<(request::RequestMethod, &'static str), Handler>>,
 ) {
     let mut buf = [0; 1024];
-    let byte_read = stream.read(&mut buf).expect("Failed to read from client!");
+    let byte_read = match stream.read(&mut buf).await {
+        Ok(0) => return,
+        Ok(n) => n,
+        Err(_) => return,
+    };
 
     if byte_read == 0 {
         return;
@@ -74,16 +76,17 @@ fn handle_client(
     let req = String::from_utf8_lossy(&buf[..byte_read]);
 
     match parse_request(req.to_string()) {
-        Ok(request) => {
-            route_request(&mut stream, &request, &routes);
-        }
+        Ok(request) => match routes.get(&(request.method, request.path.as_str())) {
+            Some(handler) => handler(&mut stream, &request).await,
+            None => utils::error_response(&mut stream, Some(404), "Not Found").await,
+        },
         Err(error) => {
             let response = format!(
                 "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\n\r\n{}",
                 error.len(),
                 error
             );
-            stream.write_all(response.as_bytes()).ok();
+            stream.write_all(response.as_bytes()).await.ok();
         }
     }
 }
@@ -114,17 +117,6 @@ fn parse_request(req: String) -> Result<Request, String> {
     let body = parse_body(body_str.as_bytes().to_vec(), &headers)?;
 
     Ok(Request::new(method, path, query_params, body))
-}
-
-fn route_request(
-    stream: &mut TcpStream,
-    req: &Request,
-    routes: &HashMap<(request::RequestMethod, &'static str), Handler>,
-) {
-    match routes.get(&(req.method, req.path.as_str())) {
-        Some(handler) => handler(stream, req),
-        None => utils::error_response(stream, Some(404), "Not Found"),
-    }
 }
 
 fn percent_decode(s: &str) -> String {
