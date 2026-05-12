@@ -1,5 +1,5 @@
 [package]
-name = "rust-http-server"
+name = "rust_http_server"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,3 +7,6 @@ edition = "2024"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.52.3", features = ["full"] }
+
+[dev-dependencies]
+reqwest = { version = "0.13.3", features = ["json"] }

@@ -21,29 +21,37 @@ impl Server {
         }
     }
 
-    pub async fn listen(self, port: u16, mut shutdown: broadcast::Receiver<()>) {
+    pub async fn listen(self, port: u16, mut shutdown: broadcast::Receiver<()>) -> u16 {
         let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
             .await
             .expect("Failed to bind to address");
+
+        let actual_port = listener.local_addr().unwrap().port();
+        println!("Server listening on port: {actual_port}");
+
         let routes = Arc::new(self.routes);
 
-        loop {
-            tokio::select! {
-                result = listener.accept() => {
-                    match result {
-                        Ok((stream, _)) => {
-                            let routes = Arc::clone(&routes);
-                            tokio::spawn(handle_client(stream, routes));
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = listener.accept() => {
+                        match result {
+                            Ok((stream, _)) => {
+                                let routes = Arc::clone(&routes);
+                                tokio::spawn(handle_client(stream, routes));
+                            }
+                            Err(e) => eprintln!("Failed to establish connection: {e}"),
                         }
-                        Err(e) => eprintln!("Failed to establish connection: {e}"),
+                    }
+                    _ = shutdown.recv() => {
+                        println!("Shutting down...");
+                        break;
                     }
                 }
-                _ = shutdown.recv() => {
-                    println!("Shutting down...");
-                    break;
-                }
             }
-        }
+        });
+
+        actual_port
     }
 
     fn add_route(
